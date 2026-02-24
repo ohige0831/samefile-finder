@@ -6,6 +6,7 @@ import os
 import queue
 import threading
 import time
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -352,6 +353,7 @@ class DuplicateFinderApp:
         self.tree.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         x_scroll.grid(row=1, column=0, sticky="ew")
+        self.tree.bind("<Double-1>", self._open_selected_in_explorer)
 
         table_frame.rowconfigure(0, weight=1)
         table_frame.columnconfigure(0, weight=1)
@@ -447,15 +449,40 @@ class DuplicateFinderApp:
         self.root.update()
         self.status_var.set(f"{len(paths)} 件のパスをクリップボードにコピーしました。")
 
-    def _poll_events(self) -> None:
+    def _open_selected_in_explorer(self, event: tk.Event) -> None:
+        # ダブルクリックされた行を取得
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
+            return
+
+        values = self.tree.item(item_id, "values")
+        if len(values) < 4:
+            return
+
+        file_path = Path(str(values[3]))
+
+        if not file_path.exists():
+            messagebox.showwarning("ファイルなし", f"ファイルが見つかりません:\n{file_path}")
+            return
+
         try:
-            while True:
-                event_type, payload = self.event_queue.get_nowait()
-                self._handle_event(event_type, payload)
-        except queue.Empty:
-            pass
-        finally:
-            self.root.after(150, self._poll_events)
+            # Windows Explorer でファイル選択状態で開く
+            subprocess.run(
+                ["explorer", "/select,", str(file_path)],
+                check=False,
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", f"エクスプローラーを開けませんでした:\n{e}")
+
+        def _poll_events(self) -> None:
+            try:
+                while True:
+                    event_type, payload = self.event_queue.get_nowait()
+                    self._handle_event(event_type, payload)
+            except queue.Empty:
+                pass
+            finally:
+                self.root.after(150, self._poll_events)
 
     def _handle_event(self, event_type: str, payload: dict) -> None:
         if event_type == "status":
