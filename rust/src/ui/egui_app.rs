@@ -1,7 +1,8 @@
 use crate::app::pipeline::run_pipeline;
 use crate::core::types::{ScanConfig, ScanEvent, SkipReason};
 use eframe::egui;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
@@ -17,6 +18,7 @@ pub struct SameFileFinderApp {
     duplicate_lines: Vec<String>,
     is_running: bool,
     rx: Option<Receiver<UiMessage>>,
+    selected_result_index: Option<usize>,
 }
 
 impl Default for SameFileFinderApp {
@@ -27,6 +29,7 @@ impl Default for SameFileFinderApp {
             duplicate_lines: Vec::new(),
             is_running: false,
             rx: None,
+            selected_result_index: None,
         }
     }
 }
@@ -49,6 +52,54 @@ impl SameFileFinderApp {
         }
     }
 
+    fn is_probably_file_path_line(line: &str) -> bool {
+        let s = line.trim();
+        !s.is_empty() && !s.starts_with("[Group ")
+    }
+
+    fn selected_file_path(&self) -> Option<PathBuf> {
+        let idx = self.selected_result_index?;
+        let line = self.duplicate_lines.get(idx)?;
+        if !Self::is_probably_file_path_line(line) {
+            return None;
+        }
+        Some(PathBuf::from(line))
+    }
+
+    fn open_selected_in_explorer(&mut self) {
+        let Some(path) = self.selected_file_path() else {
+            self.push_log("[Info] Select a file path line first.");
+            return;
+        };
+
+        let target = if path.is_file() {
+            path.parent().map(Path::to_path_buf).unwrap_or(path)
+        } else {
+            path
+        };
+
+        if !target.exists() {
+            self.push_log(format!(
+                "[Error] Path does not exist: {}",
+                target.display()
+            ));
+            return;
+        }
+
+        match Command::new("explorer").arg(&target).spawn() {
+            Ok(_) => {
+                self.push_log(format!("[Info] Opened: {}", target.display()));
+            }
+            Err(e) => {
+                self.push_log(format!(
+                    "[Error] Failed to open explorer for {}: {}",
+                    target.display(),
+                    e
+                ));
+            }
+        }
+    }
+
     fn start_scan_async(&mut self) {
         let normalized: String = self
             .target_path
@@ -65,6 +116,7 @@ impl SameFileFinderApp {
         self.target_path = normalized.clone();
         self.logs.clear();
         self.duplicate_lines.clear();
+        self.selected_result_index = None;
         self.is_running = true;
 
         let (tx, rx) = mpsc::channel::<UiMessage>();
@@ -176,6 +228,7 @@ impl SameFileFinderApp {
 
         if let Some(lines) = pending_dup {
             self.duplicate_lines = lines;
+            self.selected_result_index = None;
         }
 
         if finished {
@@ -187,10 +240,8 @@ impl SameFileFinderApp {
 
 impl eframe::App for SameFileFinderApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 非同期メッセージを毎フレーム回収
         self.poll_messages();
 
-        // 実行中は定期的に再描画（ログを流すため）
         if self.is_running {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
@@ -209,6 +260,12 @@ impl eframe::App for SameFileFinderApp {
 
                 if ui.button("Clear Logs").clicked() {
                     self.logs.clear();
+                }
+
+                let can_open = self.selected_file_path().is_some();
+                let open_btn = ui.add_enabled(can_open, egui::Button::new("Open Folder"));
+                if open_btn.clicked() {
+                    self.open_selected_in_explorer();
                 }
             });
 
@@ -235,18 +292,49 @@ impl eframe::App for SameFileFinderApp {
                     ui.heading("Duplicate Result");
                     ui.separator();
 
+                    // ループ中に self を mutable に触らないため、操作要求を後で処理する
+                    let mut request_select: Option<usize> = None;
+                    let mut request_open: Option<usize> = None;
+
                     egui::ScrollArea::vertical()
                         .id_salt("dup_scroll")
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
-                            for line in &self.duplicate_lines {
+                            for (i, line) in self.duplicate_lines.iter().enumerate() {
                                 if line.is_empty() {
                                     ui.separator();
+                                    continue;
+                                }
+
+                                let is_selected = self.selected_result_index == Some(i);
+
+                                if line.starts_with("[Group ") {
+                                    let text = egui::RichText::new(line).strong();
+                                    let resp = ui.selectable_label(is_selected, text);
+                                    if resp.clicked() {
+                                        request_select = Some(i);
+                                    }
                                 } else {
-                                    ui.label(line);
+                                    let resp = ui.selectable_label(is_selected, line);
+                                    if resp.clicked() {
+                                        request_select = Some(i);
+                                    }
+                                    if resp.double_clicked() {
+                                        request_select = Some(i);
+                                        request_open = Some(i);
+                                    }
                                 }
                             }
                         });
+
+                    // ループ終了後に mutable 操作を実行
+                    if let Some(i) = request_select {
+                        self.selected_result_index = Some(i);
+                    }
+                    if let Some(i) = request_open {
+                        self.selected_result_index = Some(i);
+                        self.open_selected_in_explorer();
+                    }
                 });
             });
         });
