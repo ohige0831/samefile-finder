@@ -2,12 +2,21 @@ use crate::app::pipeline::run_pipeline;
 use crate::core::types::{ScanConfig, ScanEvent, SkipReason};
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+
+enum UiMessage {
+    Log(String),
+    DuplicateLines(Vec<String>),
+    Finished,
+}
 
 pub struct SameFileFinderApp {
     target_path: String,
     logs: Vec<String>,
     duplicate_lines: Vec<String>,
     is_running: bool,
+    rx: Option<Receiver<UiMessage>>,
 }
 
 impl Default for SameFileFinderApp {
@@ -17,6 +26,7 @@ impl Default for SameFileFinderApp {
             logs: Vec::new(),
             duplicate_lines: Vec::new(),
             is_running: false,
+            rx: None,
         }
     }
 }
@@ -39,8 +49,7 @@ impl SameFileFinderApp {
         }
     }
 
-    fn run_scan(&mut self) {
-        // borrowを残さないよう、最初に owned String を作る
+    fn start_scan_async(&mut self) {
         let normalized: String = self
             .target_path
             .trim()
@@ -53,85 +62,139 @@ impl SameFileFinderApp {
             return;
         }
 
-        // 正規化した文字列をUIにも反映
         self.target_path = normalized.clone();
-
         self.logs.clear();
         self.duplicate_lines.clear();
         self.is_running = true;
 
-        let config = ScanConfig {
-            target_root: PathBuf::from(&normalized),
-            follow_symlinks: false,
-            min_file_size_bytes: 1,
-        };
+        let (tx, rx) = mpsc::channel::<UiMessage>();
+        self.rx = Some(rx);
 
-        self.push_log(format!("[Start] {}", normalized));
+        let _ = tx.send(UiMessage::Log(format!("[Start] {}", normalized)));
 
-        let mut local_logs: Vec<String> = Vec::new();
-        let mut local_duplicates: Vec<String> = Vec::new();
+        thread::spawn(move || {
+            let config = ScanConfig {
+                target_root: PathBuf::from(&normalized),
+                follow_symlinks: false,
+                min_file_size_bytes: 1,
+            };
 
-        let result = run_pipeline(config, |event| match event {
-            ScanEvent::StageStarted(stage) => {
-                local_logs.push(format!("[Stage] {}", stage));
-            }
-            ScanEvent::Progress(msg) => {
-                local_logs.push(format!("[Info] {}", msg));
-            }
-            ScanEvent::FileScanned(_path) => {
-                // 件数が多くなりやすいので今は表示しない
-            }
-            ScanEvent::FileHashing { path, current, total } => {
-                local_logs.push(format!("[Hash] {}/{} {}", current, total, path.display()));
-            }
-            ScanEvent::FileSkipped { path, reason } => {
-                local_logs.push(format!(
-                    "[Skip] {} | {}",
-                    path.display(),
-                    Self::format_skip_reason(&reason)
-                ));
-            }
-            ScanEvent::Summary(summary) => {
-                local_logs.push(String::new());
-                local_logs.push("=== Done ===".to_string());
-                local_logs.push(format!("Scanned files    : {}", summary.scanned_files));
-                local_logs.push(format!("Candidate files  : {}", summary.candidate_files));
-                local_logs.push(format!("Skipped files    : {}", summary.skipped_files));
-                local_logs.push(format!("Duplicate groups : {}", summary.duplicate_groups.len()));
+            let mut dup_lines: Vec<String> = Vec::new();
 
-                for (i, group) in summary.duplicate_groups.iter().enumerate() {
-                    local_duplicates.push(format!(
-                        "[Group {}] hash={} count={} size={} bytes",
-                        i + 1,
-                        group.hash_hex,
-                        group.files.len(),
-                        group.file_size_bytes
-                    ));
-                    for path in &group.files {
-                        local_duplicates.push(path.display().to_string());
+            let result = run_pipeline(config, |event| match event {
+                ScanEvent::StageStarted(stage) => {
+                    let _ = tx.send(UiMessage::Log(format!("[Stage] {}", stage)));
+                }
+                ScanEvent::Progress(msg) => {
+                    let _ = tx.send(UiMessage::Log(format!("[Info] {}", msg)));
+                }
+                ScanEvent::FileScanned(_path) => {
+                    // 多すぎるので今は送らない
+                }
+                ScanEvent::FileHashing { path, current, total } => {
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "[Hash] {}/{} {}",
+                        current,
+                        total,
+                        path.display()
+                    )));
+                }
+                ScanEvent::FileSkipped { path, reason } => {
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "[Skip] {} | {}",
+                        path.display(),
+                        SameFileFinderApp::format_skip_reason(&reason)
+                    )));
+                }
+                ScanEvent::Summary(summary) => {
+                    let _ = tx.send(UiMessage::Log(String::new()));
+                    let _ = tx.send(UiMessage::Log("=== Done ===".to_string()));
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "Scanned files    : {}",
+                        summary.scanned_files
+                    )));
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "Candidate files  : {}",
+                        summary.candidate_files
+                    )));
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "Skipped files    : {}",
+                        summary.skipped_files
+                    )));
+                    let _ = tx.send(UiMessage::Log(format!(
+                        "Duplicate groups : {}",
+                        summary.duplicate_groups.len()
+                    )));
+
+                    for (i, group) in summary.duplicate_groups.iter().enumerate() {
+                        dup_lines.push(format!(
+                            "[Group {}] hash={} count={} size={} bytes",
+                            i + 1,
+                            group.hash_hex,
+                            group.files.len(),
+                            group.file_size_bytes
+                        ));
+                        for path in &group.files {
+                            dup_lines.push(path.display().to_string());
+                        }
+                        dup_lines.push(String::new());
                     }
-                    local_duplicates.push(String::new());
+                }
+            });
+
+            match result {
+                Ok(_) => {
+                    let _ = tx.send(UiMessage::DuplicateLines(dup_lines));
+                }
+                Err(err) => {
+                    let _ = tx.send(UiMessage::Log(format!("[Error] {}", err)));
                 }
             }
-        });
 
-        match result {
-            Ok(_) => {
-                self.logs.extend(local_logs);
-                self.duplicate_lines = local_duplicates;
-            }
-            Err(err) => {
-                self.logs.extend(local_logs);
-                self.push_log(format!("[Error] {}", err));
+            let _ = tx.send(UiMessage::Finished);
+        });
+    }
+
+    fn poll_messages(&mut self) {
+        let mut finished = false;
+        let mut pending_logs: Vec<String> = Vec::new();
+        let mut pending_dup: Option<Vec<String>> = None;
+
+        if let Some(rx) = &self.rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    UiMessage::Log(line) => pending_logs.push(line),
+                    UiMessage::DuplicateLines(lines) => pending_dup = Some(lines),
+                    UiMessage::Finished => finished = true,
+                }
             }
         }
 
-        self.is_running = false;
+        for line in pending_logs {
+            self.push_log(line);
+        }
+
+        if let Some(lines) = pending_dup {
+            self.duplicate_lines = lines;
+        }
+
+        if finished {
+            self.is_running = false;
+            self.rx = None;
+        }
     }
 }
 
 impl eframe::App for SameFileFinderApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 非同期メッセージを毎フレーム回収
+        self.poll_messages();
+
+        // 実行中は定期的に再描画（ログを流すため）
+        if self.is_running {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             ui.heading("SameFile_Finder v2 (Rust / egui)");
 
@@ -141,7 +204,7 @@ impl eframe::App for SameFileFinderApp {
 
                 let run_btn = ui.add_enabled(!self.is_running, egui::Button::new("Run"));
                 if run_btn.clicked() {
-                    self.run_scan();
+                    self.start_scan_async();
                 }
 
                 if ui.button("Clear Logs").clicked() {
