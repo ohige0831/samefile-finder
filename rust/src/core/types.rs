@@ -61,7 +61,7 @@ pub struct HashStats {
 #[derive(Debug, Clone)]
 pub struct PipelineSummary {
     pub scanned_files: usize,
-    pub candidate_files: usize,      // same-size candidates
+    pub candidate_files: usize,        // same-size candidates
     pub fingerprint_candidates: usize, // after fingerprint
     pub skipped_files: usize,
     pub duplicate_groups: Vec<DuplicateGroup>,

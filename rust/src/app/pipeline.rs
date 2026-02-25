@@ -74,8 +74,7 @@ where
 
     event_sink(ScanEvent::Progress(format!(
         "Fingerprint candidates: {} -> {}",
-        fp_stage.stats.total_inputs,
-        fp_stage.stats.narrowed_outputs
+        fp_stage.stats.total_inputs, fp_stage.stats.narrowed_outputs
     )));
     event_sink(ScanEvent::FingerprintStats(fp_stage.stats.clone()));
 

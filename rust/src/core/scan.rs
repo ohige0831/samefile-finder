@@ -16,7 +16,13 @@ pub fn scan_files(config: &ScanConfig, cancel_flag: &AtomicBool) -> Result<ScanR
     let mut files: Vec<FileEntry> = Vec::new();
     let mut skipped: Vec<SkippedEntry> = Vec::new();
 
-    walk_dir(&config.target_root, config, &mut files, &mut skipped, cancel_flag)?;
+    walk_dir(
+        &config.target_root,
+        config,
+        &mut files,
+        &mut skipped,
+        cancel_flag,
+    )?;
 
     Ok(ScanResult { files, skipped })
 }
@@ -40,7 +46,9 @@ fn should_skip_dir_name(name: &str) -> bool {
 fn should_skip_file_name(name: &str) -> bool {
     matches!(
         name,
-        ".samefile_finder_cache.sqlite3" | ".samefile_finder_cache.sqlite3-shm" | ".samefile_finder_cache.sqlite3-wal"
+        ".samefile_finder_cache.sqlite3"
+            | ".samefile_finder_cache.sqlite3-shm"
+            | ".samefile_finder_cache.sqlite3-wal"
     )
 }
 

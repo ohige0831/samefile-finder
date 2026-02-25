@@ -52,7 +52,8 @@ where
                     stats.cache_misses += 1;
                     stats.computed += 1;
                     let fresh = compute_fingerprint(file, cancel_flag)?;
-                    let _ = db.upsert_fingerprint(&file.path, file.size_bytes, file.mtime_ns, &fresh);
+                    let _ =
+                        db.upsert_fingerprint(&file.path, file.size_bytes, file.mtime_ns, &fresh);
                     fresh
                 }
                 Err(_) => {
@@ -67,7 +68,10 @@ where
             compute_fingerprint(file, cancel_flag)?
         };
 
-        by_fp.entry((file.size_bytes, fp)).or_default().push(file.clone());
+        by_fp
+            .entry((file.size_bytes, fp))
+            .or_default()
+            .push(file.clone());
     }
 
     let mut narrowed: Vec<FileEntry> = Vec::new();
@@ -90,8 +94,13 @@ fn compute_fingerprint(file: &FileEntry, cancel_flag: &AtomicBool) -> Result<Vec
         return Err("__CANCELED__".to_string());
     }
 
-    let mut f = File::open(&file.path)
-        .map_err(|e| format!("Failed to open file for fingerprint {}: {}", file.path.display(), e))?;
+    let mut f = File::open(&file.path).map_err(|e| {
+        format!(
+            "Failed to open file for fingerprint {}: {}",
+            file.path.display(),
+            e
+        )
+    })?;
 
     let mut ctx = Context::new();
     ctx.consume(&file.size_bytes.to_le_bytes());
@@ -112,8 +121,13 @@ fn compute_fingerprint(file: &FileEntry, cancel_flag: &AtomicBool) -> Result<Vec
         }
     } else {
         let mut head = vec![0u8; FP_CHUNK_SIZE];
-        f.read_exact(&mut head)
-            .map_err(|e| format!("Failed to read head fingerprint {}: {}", file.path.display(), e))?;
+        f.read_exact(&mut head).map_err(|e| {
+            format!(
+                "Failed to read head fingerprint {}: {}",
+                file.path.display(),
+                e
+            )
+        })?;
         ctx.consume(&head);
 
         if cancel_flag.load(Ordering::Relaxed) {
@@ -121,11 +135,21 @@ fn compute_fingerprint(file: &FileEntry, cancel_flag: &AtomicBool) -> Result<Vec
         }
 
         let tail_pos = file.size_bytes.saturating_sub(FP_CHUNK_SIZE as u64);
-        f.seek(SeekFrom::Start(tail_pos))
-            .map_err(|e| format!("Failed to seek tail fingerprint {}: {}", file.path.display(), e))?;
+        f.seek(SeekFrom::Start(tail_pos)).map_err(|e| {
+            format!(
+                "Failed to seek tail fingerprint {}: {}",
+                file.path.display(),
+                e
+            )
+        })?;
         let mut tail = vec![0u8; FP_CHUNK_SIZE];
-        f.read_exact(&mut tail)
-            .map_err(|e| format!("Failed to read tail fingerprint {}: {}", file.path.display(), e))?;
+        f.read_exact(&mut tail).map_err(|e| {
+            format!(
+                "Failed to read tail fingerprint {}: {}",
+                file.path.display(),
+                e
+            )
+        })?;
         ctx.consume(&tail);
     }
 

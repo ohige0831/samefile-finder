@@ -15,7 +15,7 @@ fn try_load_japanese_font_bytes() -> Option<Vec<u8>> {
         "./assets/fonts/NotoSansJP-Regular.ttf",
         // Windows標準/Office系でTTFがある場合の候補（一部環境のみ）
         r"C:\Windows\Fonts\arialuni.ttf",
-        r"F:\code_vault\30_tools\SameFile_Finder\samefile-finder\rust\src\assets\fonts\NotoSansJP-VF.ttf"
+        r"F:\code_vault\30_tools\SameFile_Finder\samefile-finder\rust\src\assets\fonts\NotoSansJP-VF.ttf",
     ];
 
     for path in candidates {
@@ -65,7 +65,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             setup_japanese_font(cc);
-            Ok(Box::new(ui::egui_app::SameFileFinderApp::default()))
+            Ok(Box::new(ui::SameFileApp::default()))
         }),
     )
 }

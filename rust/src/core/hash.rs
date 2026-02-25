@@ -62,7 +62,10 @@ where
             compute_md5_hex(file, cancel_flag)?
         };
 
-        by_key.entry((file.size_bytes, hash_hex)).or_default().push(file);
+        by_key
+            .entry((file.size_bytes, hash_hex))
+            .or_default()
+            .push(file);
     }
 
     let mut groups: Vec<DuplicateGroup> = Vec::new();
