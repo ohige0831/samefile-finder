@@ -3,33 +3,7 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 
-use crate::ui::state::SameFileApp;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum GroupBadge {
-    Mixed,
-    Shared,
-    Internal,
-}
-
-#[derive(Clone, Debug)]
-struct GroupView {
-    group_index: usize, // 1-based
-    hash_hex: String,
-    file_size_bytes: u64,
-    files: Vec<PathBuf>,
-    badges: BTreeSet<GroupBadge>,
-}
-
-#[derive(Clone, Debug)]
-struct FolderBucketView {
-    folder: String,
-    groups: Vec<GroupView>,
-    file_count_total: usize,
-    group_count: usize,
-    related_folders: BTreeSet<String>,
-    badges: BTreeSet<GroupBadge>,
-}
+use crate::ui::state::{FolderBucketView, GroupBadge, GroupView, SameFileApp};
 
 pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
     ui.group(|ui| {
@@ -51,30 +25,42 @@ pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
 
         ui.separator();
 
-        let Some(summary) = app.last_summary.clone() else {
+        if app.last_summary.is_none() {
             ui.label("No results yet.");
             return;
-        };
+        }
+
+        // v2.1.3: last_summary.clone() を避けるため一時的にムーブして描画後に戻す
+        let summary = app.last_summary.take().expect("summary checked above");
 
         let target_root = normalize_target_root(&app.target_path);
+
+        // v2.1.3: フォルダ集計は毎フレーム再構築せずキャッシュ（必要時のみ構築）
+        let mut folder_cache = app.folder_buckets_cache.take();
+        if app.show_folder_grouping && folder_cache.is_none() {
+            folder_cache = Some(build_folder_buckets(
+                &summary.duplicate_groups,
+                target_root.as_deref(),
+            ));
+        }
 
         egui::ScrollArea::both()
             .id_salt("dup_scroll_card_style")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 if app.show_folder_grouping {
-                    let buckets =
-                        build_folder_buckets(&summary.duplicate_groups, target_root.as_deref());
-                    draw_folder_bucket_view(app, ui, &buckets);
+                    if let Some(buckets) = folder_cache.as_deref() {
+                        draw_folder_bucket_view(app, ui, buckets);
+                    } else {
+                        ui.label("No grouped results yet.");
+                    }
                 } else {
-                    draw_flat_group_view(
-                        app,
-                        ui,
-                        &summary.duplicate_groups,
-                        target_root.as_deref(),
-                    );
+                    draw_flat_group_view(app, ui, &summary.duplicate_groups, target_root.as_deref());
                 }
             });
+
+        app.folder_buckets_cache = folder_cache;
+        app.last_summary = Some(summary);
     });
 }
 
@@ -91,9 +77,8 @@ fn draw_folder_bucket_view(app: &mut SameFileApp, ui: &mut egui::Ui, buckets: &[
                 .color(egui::Color32::from_rgb(205, 205, 205)),
         )
         .id_salt(("folder_bucket", &bucket.folder))
-        .default_open(true)
+        .default_open(false)
         .show(ui, |ui| {
-            // badges
             ui.horizontal_wrapped(|ui| {
                 for badge in [GroupBadge::Mixed, GroupBadge::Shared, GroupBadge::Internal] {
                     if bucket.badges.contains(&badge) {
@@ -102,7 +87,6 @@ fn draw_folder_bucket_view(app: &mut SameFileApp, ui: &mut egui::Ui, buckets: &[
                 }
             });
 
-            // shares duplicate files with ...
             let shares_text = if bucket.related_folders.is_empty() {
                 "↔ shares duplicate files within this folder only".to_string()
             } else {
@@ -165,6 +149,10 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView) {
                         .monospace()
                         .color(egui::Color32::from_rgb(210, 210, 210)),
                     );
+
+                    for badge in &gv.badges {
+                        draw_badge_chip(ui, *badge);
+                    }
                 });
 
                 ui.add_space(2.0);
@@ -208,7 +196,7 @@ fn draw_flat_group_view(
                 .color(header_color),
         )
         .id_salt(("flat_group", idx))
-        .default_open(true)
+        .default_open(false)
         .show(ui, |ui| {
             for file_path in files {
                 draw_file_row(app, ui, file_path);
@@ -324,7 +312,6 @@ where
         }
     }
 
-    // ソート（表示安定）
     let mut out: Vec<_> = buckets.into_values().collect();
     for b in &mut out {
         b.groups.sort_by_key(|g| g.group_index);
@@ -346,12 +333,7 @@ fn is_selected_path(app: &SameFileApp, target: &Path) -> bool {
 }
 
 fn select_path_in_duplicate_rows(app: &mut SameFileApp, target: &Path) {
-    if let Some((idx, _)) = app
-        .duplicate_rows
-        .iter()
-        .enumerate()
-        .find(|(_, row)| row.path.as_deref() == Some(target))
-    {
+    if let Some(idx) = app.duplicate_row_index_by_path.get(target).copied() {
         app.selected_duplicate_index = Some(idx);
     } else {
         app.selected_duplicate_index = None;
@@ -410,14 +392,12 @@ fn normalize_target_root(raw: &str) -> Option<PathBuf> {
     Some(PathBuf::from(s))
 }
 
-/// `PipelineSummary.duplicate_groups` の具体型名に依存しないための薄い抽象
 trait GroupLike {
     fn hash_hex(&self) -> &str;
     fn file_size_bytes(&self) -> u64;
     fn files(&self) -> &[PathBuf];
 }
 
-// ここは core::types の duplicate group 型に合わせる
 impl GroupLike for crate::core::types::DuplicateGroup {
     fn hash_hex(&self) -> &str {
         &self.hash_hex

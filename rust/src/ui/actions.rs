@@ -255,6 +255,8 @@ impl SameFileApp {
         self.target_path = normalized.clone();
         self.logs.clear();
         self.duplicate_rows.clear();
+        self.duplicate_row_index_by_path.clear();
+        self.folder_buckets_cache = None;
         self.selected_duplicate_index = None;
         self.is_running = true;
         self.status_text = "Running...".to_string();

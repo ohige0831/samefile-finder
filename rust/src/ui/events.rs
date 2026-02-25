@@ -90,6 +90,7 @@ impl SameFileApp {
             }
             ScanEvent::Summary(summary) => {
                 self.last_summary = Some(summary.clone());
+                self.folder_buckets_cache = None; // v2.1.3: 次回描画時に1回だけ再構築
 
                 self.push_log(String::new());
                 self.push_log("=== Done ===");
@@ -106,6 +107,8 @@ impl SameFileApp {
                 ));
 
                 self.duplicate_rows.clear();
+                self.duplicate_row_index_by_path.clear();
+
                 for (i, group) in summary.duplicate_groups.iter().enumerate() {
                     self.duplicate_rows.push(DuplicateRow {
                         text: format!(
@@ -119,10 +122,13 @@ impl SameFileApp {
                     });
 
                     for path in &group.files {
+                        let next_idx = self.duplicate_rows.len();
                         self.duplicate_rows.push(DuplicateRow {
                             text: path.display().to_string(),
                             path: Some(path.clone()),
                         });
+                        self.duplicate_row_index_by_path
+                            .insert(path.clone(), next_idx);
                     }
 
                     self.duplicate_rows.push(DuplicateRow {
