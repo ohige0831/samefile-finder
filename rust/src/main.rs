@@ -53,15 +53,16 @@ fn setup_japanese_font(cc: &eframe::CreationContext<'_>) {
 }
 
 fn main() -> eframe::Result<()> {
+    let title = "SameFile_Finder v2.3.1 (Rust)";
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("SameFile_Finder v2 (Rust)")
+            .with_title(title)
             .with_inner_size([1280.0, 800.0]),
         ..Default::default()
     };
 
     eframe::run_native(
-        "SameFile_Finder v2 (Rust)",
+        title,
         options,
         Box::new(|cc| {
             setup_japanese_font(cc);

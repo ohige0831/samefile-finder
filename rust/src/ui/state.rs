@@ -110,6 +110,9 @@ pub struct SameFileApp {
     pub group_badge_filter: GroupBadgeFilter,
     pub group_name_filter: String,
 
+    // v2.3.1: search option
+    pub search_filename_only: bool,
+
     // v2.3.0: cache DB info
     pub cache_db_path: String,
     pub cache_entries: Option<u64>,
@@ -141,6 +144,8 @@ impl Default for SameFileApp {
             group_sort_mode: GroupSortMode::GroupIndexAsc,
             group_badge_filter: GroupBadgeFilter::All,
             group_name_filter: String::new(),
+
+            search_filename_only: false,
 
             cache_db_path,
             cache_entries: None,

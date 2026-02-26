@@ -60,6 +60,8 @@ pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
                     .hint_text("contains...")
                     .desired_width(240.0),
             );
+            ui.checkbox(&mut app.search_filename_only, "file name only");
+
             if ui.button("Clear Search").clicked() {
                 app.group_name_filter.clear();
             }
@@ -141,23 +143,39 @@ fn draw_folder_bucket_view(
                 }
             });
 
-            let shares_text = if bucket.related_folders.is_empty() {
-                "↔ shares duplicate files within this folder only".to_string()
-            } else {
-                let related = bucket
-                    .related_folders
-                    .iter()
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("↔ shares duplicate files with: {}", related)
-            };
+            ui.add_space(2.0);
 
-            ui.label(
-                egui::RichText::new(shares_text)
-                    .italics()
-                    .color(egui::Color32::from_rgb(165, 165, 165)),
-            );
+            // related folders chips (+N more)
+            if bucket.related_folders.is_empty() {
+                ui.label(
+                    egui::RichText::new("↔ shares duplicate files within this folder only")
+                        .italics()
+                        .color(egui::Color32::from_rgb(165, 165, 165)),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new("↔ shares duplicate files with:")
+                        .italics()
+                        .color(egui::Color32::from_rgb(165, 165, 165)),
+                );
+
+                let related: Vec<String> = bucket.related_folders.iter().cloned().collect();
+                let show_max = 5usize;
+                let shown = related.len().min(show_max);
+
+                ui.horizontal_wrapped(|ui| {
+                    for name in related.iter().take(shown) {
+                        draw_folder_chip(ui, name);
+                    }
+
+                    if related.len() > shown {
+                        let rest = related.len() - shown;
+                        let rest_list = related.iter().skip(shown).cloned().collect::<Vec<_>>().join("\n");
+                        let resp = ui.add(egui::Button::new(format!("+{} more", rest)));
+                        resp.on_hover_text(rest_list);
+                    }
+                });
+            }
 
             ui.add_space(4.0);
 
@@ -181,6 +199,8 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView, tar
         .unwrap_or(GroupBadge::Internal);
     let meaning = badge_explain_text(badge);
 
+    let short_hash = shorten_hash(&gv.hash_hex);
+
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
@@ -201,16 +221,19 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView, tar
                             ui.label(chip);
                         });
 
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "hash={} | {} file(s) | {}",
-                            gv.hash_hex,
-                            gv.files.len(),
-                            human_readable_bytes(gv.file_size_bytes)
-                        ))
-                        .monospace()
-                        .color(egui::Color32::from_rgb(210, 210, 210)),
+                    let meta_text = format!(
+                        "hash={} | {} file(s) | {}",
+                        short_hash,
+                        gv.files.len(),
+                        human_readable_bytes(gv.file_size_bytes)
                     );
+
+                    let resp = ui.label(
+                        egui::RichText::new(meta_text)
+                            .monospace()
+                            .color(egui::Color32::from_rgb(210, 210, 210)),
+                    );
+                    resp.on_hover_text(format!("hash(full): {}", gv.hash_hex));
 
                     for badge in &gv.badges {
                         draw_badge_chip(ui, *badge);
@@ -301,8 +324,9 @@ fn draw_file_row(app: &mut SameFileApp, ui: &mut egui::Ui, file_path: &Path, tar
         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4)
     });
 
+    // v2.3.1: row height (46px)
     let response = ui
-        .add_sized([ui.available_width(), 38.0], button)
+        .add_sized([ui.available_width(), 46.0], button)
         .on_hover_text(file_path.display().to_string());
 
     if response.clicked() {
@@ -334,6 +358,32 @@ fn draw_badge_chip(ui: &mut egui::Ui, badge: GroupBadge) {
                     .color(egui::Color32::WHITE),
             );
         });
+}
+
+fn draw_folder_chip(ui: &mut egui::Ui, text: &str) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 18))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(8, 2))
+        .show(ui, |ui| {
+            let resp = ui.label(
+                egui::RichText::new(text)
+                    .monospace()
+                    .size(11.0)
+                    .color(egui::Color32::from_rgb(200, 200, 200)),
+            );
+            resp.on_hover_text(text);
+        });
+}
+
+fn shorten_hash(hash_hex: &str) -> String {
+    // 8桁 + "…"（短縮表示）
+    const N: usize = 8;
+    if hash_hex.len() <= N {
+        return hash_hex.to_string();
+    }
+    format!("{}…", &hash_hex[..N])
 }
 
 fn build_folder_buckets<T>(groups: &[T], target_root: Option<&Path>) -> Vec<FolderBucketView>
@@ -420,8 +470,14 @@ fn group_matches_filters(gv: &GroupView, app: &SameFileApp, target_root: Option<
     }
 
     gv.files.iter().any(|p| {
-        let s = p.to_string_lossy().to_lowercase();
-        s.contains(&q)
+        if app.search_filename_only {
+            p.file_name()
+                .map(|s| s.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
+                .contains(&q)
+        } else {
+            p.to_string_lossy().to_lowercase().contains(&q)
+        }
     })
 }
 

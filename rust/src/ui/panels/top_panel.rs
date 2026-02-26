@@ -4,7 +4,7 @@ use crate::ui::state::SameFileApp;
 
 pub fn draw_top_panel(app: &mut SameFileApp, ctx: &egui::Context) {
     egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
-        ui.heading("SameFile_Finder v2 (Rust / egui)");
+        ui.heading("SameFile_Finder v2.3.1 (Rust / egui)");
 
         ui.horizontal(|ui| {
             ui.label("Target Path:");
@@ -32,6 +32,20 @@ pub fn draw_top_panel(app: &mut SameFileApp, ctx: &egui::Context) {
                     .small()
                     .color(egui::Color32::GRAY),
             );
+
+            ui.separator();
+            ui.label("Presets:");
+            let enabled = !app.is_running;
+
+            if ui.add_enabled(enabled, egui::Button::new("Media")).on_hover_text("lrc, txt, cue, m3u, m3u8").clicked() {
+                app.exclude_extensions_input = "lrc, txt, cue, m3u, m3u8".to_string();
+            }
+            if ui.add_enabled(enabled, egui::Button::new("Photos")).on_hover_text("xmp, thm, aae").clicked() {
+                app.exclude_extensions_input = "xmp, thm, aae".to_string();
+            }
+            if ui.add_enabled(enabled, egui::Button::new("Dev")).on_hover_text("log, tmp, cache").clicked() {
+                app.exclude_extensions_input = "log, tmp, cache".to_string();
+            }
         });
 
         ui.horizontal(|ui| {
