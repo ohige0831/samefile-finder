@@ -5,6 +5,7 @@ pub struct ScanConfig {
     pub target_root: PathBuf,
     pub follow_symlinks: bool,
     pub min_file_size_bytes: u64,
+    pub excluded_extensions: Vec<String>, // 例: ["lrc", "txt", "jpg"]
 }
 
 #[derive(Debug, Clone)]

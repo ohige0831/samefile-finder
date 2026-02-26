@@ -12,6 +12,8 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::app::pipeline::run_pipeline;
+use crate::core::cache::{global_cache_db_path, local_cache_db_path};
+use crate::adapters::sqlite_cache::CacheDb;
 use crate::core::types::{ScanConfig, SkipReason};
 
 use crate::ui::state::{SameFileApp, WorkerMessage};
@@ -40,6 +42,15 @@ impl SameFileApp {
             .trim_matches('\'')
             .trim()
             .to_string()
+    }
+
+    fn parse_excluded_extensions(raw: &str) -> Vec<String> {
+        raw.split(',')
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.trim_start_matches('.').to_ascii_lowercase())
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     pub fn selected_path(&self) -> Option<&Path> {
@@ -253,6 +264,9 @@ impl SameFileApp {
         }
 
         self.target_path = normalized.clone();
+
+        let excluded_extensions = Self::parse_excluded_extensions(&self.exclude_extensions_input);
+
         self.logs.clear();
         self.duplicate_rows.clear();
         self.duplicate_row_index_by_path.clear();
@@ -266,11 +280,20 @@ impl SameFileApp {
         self.last_hash_stats = Default::default();
 
         self.push_log(format!("[Start] {}", normalized));
+        if excluded_extensions.is_empty() {
+            self.push_log("[Config] Excluded extensions: (none)");
+        } else {
+            self.push_log(format!(
+                "[Config] Excluded extensions: {}",
+                excluded_extensions.join(", ")
+            ));
+        }
 
         let config = ScanConfig {
             target_root: PathBuf::from(normalized),
             follow_symlinks: false,
             min_file_size_bytes: 1,
+            excluded_extensions,
         };
 
         let (tx, rx) = mpsc::channel::<WorkerMessage>();
@@ -287,6 +310,75 @@ impl SameFileApp {
 
         self.worker_rx = Some(rx);
         self.cancel_flag = Some(cancel_flag);
+    }
+
+    fn current_cache_db_path(&self) -> Option<PathBuf> {
+        if let Some(p) = global_cache_db_path() {
+            return Some(p);
+        }
+
+        let normalized = Self::normalize_input_path(&self.target_path);
+        if normalized.is_empty() {
+            return None;
+        }
+
+        Some(local_cache_db_path(Path::new(&normalized)))
+    }
+
+    pub fn refresh_cache_stats(&mut self) {
+        let Some(db_path) = self.current_cache_db_path() else {
+            self.push_log("[Info] Cache DB path is not available yet.");
+            return;
+        };
+
+        match CacheDb::open(&db_path) {
+            Ok(db) => {
+                let entries = db.count_entries().ok();
+                let size = std::fs::metadata(&db_path).map(|m| m.len()).ok();
+                self.cache_entries = entries;
+                self.cache_db_size_bytes = size;
+                self.cache_db_path = db_path.to_string_lossy().to_string();
+                self.push_log(format!(
+                    "[Cache] entries={:?}, size={:?} bytes ({})",
+                    entries,
+                    size,
+                    db_path.display()
+                ));
+            }
+            Err(e) => self.push_log(format!("[Error] Cache DB open failed: {}", e)),
+        }
+    }
+
+    pub fn gc_cache_missing_paths(&mut self) {
+        let Some(db_path) = self.current_cache_db_path() else {
+            self.push_log("[Info] Cache DB path is not available yet.");
+            return;
+        };
+
+        self.push_log(format!("[CacheGC] start: {}", db_path.display()));
+        match CacheDb::open(&db_path).and_then(|db| db.gc_missing_paths()) {
+            Ok(removed) => {
+                self.push_log(format!("[CacheGC] removed {} missing paths", removed));
+                self.refresh_cache_stats();
+            }
+            Err(e) => self.push_log(format!("[Error] CacheGC failed: {}", e)),
+        }
+    }
+
+    pub fn vacuum_cache_db(&mut self) {
+        let Some(db_path) = self.current_cache_db_path() else {
+            self.push_log("[Info] Cache DB path is not available yet.");
+            return;
+        };
+
+        self.push_log(format!("[Cache] VACUUM start: {}", db_path.display()));
+        match CacheDb::open(&db_path).and_then(|db| db.vacuum()) {
+            Ok(_) => {
+                self.push_log("[Cache] VACUUM done".to_string());
+                self.refresh_cache_stats();
+            }
+            Err(e) => self.push_log(format!("[Error] VACUUM failed: {}", e)),
+        }
     }
 
     pub fn request_cancel(&mut self) {

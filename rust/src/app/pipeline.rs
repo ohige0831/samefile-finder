@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
 use crate::core::{
+    cache::{resolve_cache_db_path, CacheDbKind},
     fingerprint::build_fingerprint_candidates,
     group::build_size_candidates,
     hash::find_duplicate_groups_by_hash,
@@ -48,9 +49,14 @@ where
         size_candidates.len()
     )));
 
-    let cache_db_path = config.target_root.join(".samefile_finder_cache.sqlite3");
+    let (cache_db_path, cache_kind) = resolve_cache_db_path(&config.target_root);
+    let cache_kind_label = match cache_kind {
+        CacheDbKind::Global => "global",
+        CacheDbKind::LocalPerTarget => "local",
+    };
     event_sink(ScanEvent::Progress(format!(
-        "Cache DB: {}",
+        "Cache DB ({}): {}",
+        cache_kind_label,
         cache_db_path.display()
     )));
 

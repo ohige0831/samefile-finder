@@ -45,6 +45,29 @@ pub fn draw_summary_panel(app: &SameFileApp, ui: &mut egui::Ui) {
         ui.heading("Run Summary");
         ui.separator();
 
+        ui.label(egui::RichText::new("Cache (v2.3.0)").strong());
+        ui.label(
+            egui::RichText::new(format!("DB: {}", app.cache_db_path))
+                .small()
+                .color(egui::Color32::GRAY),
+        );
+        ui.horizontal(|ui| {
+            ui.label("Entries:");
+            ui.label(
+                app.cache_entries
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "(unknown)".to_string()),
+            );
+            ui.add_space(12.0);
+            ui.label("Size:");
+            ui.label(
+                app.cache_db_size_bytes
+                    .map(|v| format!("{} bytes", v))
+                    .unwrap_or_else(|| "(unknown)".to_string()),
+            );
+        });
+        ui.separator();
+
         let Some(summary) = &app.last_summary else {
             ui.label("No results yet.");
             return;

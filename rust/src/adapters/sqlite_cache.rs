@@ -30,6 +30,10 @@ impl CacheDb {
         let conn = Connection::open(db_path)
             .map_err(|e| format!("Failed to open cache DB {}: {}", db_path.display(), e))?;
 
+        // DBロック耐性: read/writeがぶつかっても短時間は待つ
+        // (rusqlite::Connection::busy_timeout exists, but keep it PRAGMA-based for simplicity)
+        let _ = conn.execute_batch("PRAGMA busy_timeout = 5000;");
+
         let db = Self { conn };
         db.init_schema()?;
         Ok(db)
@@ -41,6 +45,7 @@ impl CacheDb {
                 r#"
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = NORMAL;
+                PRAGMA busy_timeout = 5000;
 
                 CREATE TABLE IF NOT EXISTS file_cache (
                     path TEXT PRIMARY KEY,
@@ -192,6 +197,95 @@ impl CacheDb {
             )
             .map_err(|e| format!("Failed to upsert full-hash cache row: {}", e))?;
 
+        Ok(())
+    }
+
+    /// Return number of cached entries.
+    pub fn count_entries(&self) -> Result<u64, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT COUNT(1) FROM file_cache")
+            .map_err(|e| format!("Failed to prepare count query: {}", e))?;
+        let n: i64 = stmt
+            .query_row([], |row| row.get(0))
+            .map_err(|e| format!("Failed to run count query: {}", e))?;
+        Ok(n.max(0) as u64)
+    }
+
+    /// Migrate rows from another DB (same schema) into this DB.
+    /// This keeps the source DB intact.
+    pub fn merge_from_db(&self, other_db_path: &Path) -> Result<u64, String> {
+        let other = other_db_path.to_string_lossy().to_string();
+
+        self.conn
+            .execute("ATTACH DATABASE ?1 AS otherdb", params![other])
+            .map_err(|e| format!("Failed to attach DB for merge: {}", e))?;
+
+        let copied = self
+            .conn
+            .execute(
+                r#"
+                INSERT OR REPLACE INTO file_cache(
+                    path, size_bytes, mtime_ns, fingerprint, full_hash, hash_algo, updated_at_unix
+                )
+                SELECT
+                    path, size_bytes, mtime_ns, fingerprint, full_hash, hash_algo, updated_at_unix
+                FROM otherdb.file_cache
+                "#,
+                [],
+            )
+            .map_err(|e| format!("Failed to merge cache rows: {}", e))?;
+
+        let _ = self.conn.execute("DETACH DATABASE otherdb", []);
+
+        Ok(copied as u64)
+    }
+
+    /// GC: delete rows whose path no longer exists.
+    pub fn gc_missing_paths(&self) -> Result<u64, String> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM file_cache")
+            .map_err(|e| format!("Failed to prepare GC scan: {}", e))?;
+
+        let iter = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("Failed to query GC scan: {}", e))?;
+
+        let mut removed: u64 = 0;
+        for item in iter {
+            let path_str = item.map_err(|e| format!("Failed to read GC row: {}", e))?;
+            let p = Path::new(&path_str);
+            if !p.exists() {
+                self.conn
+                    .execute("DELETE FROM file_cache WHERE path = ?1", params![path_str])
+                    .map_err(|e| format!("Failed to delete GC row: {}", e))?;
+                removed += 1;
+            }
+        }
+
+        Ok(removed)
+    }
+
+    /// Optional GC: delete rows not updated in the last `days` days.
+    pub fn gc_older_than_days(&self, days: u64) -> Result<u64, String> {
+        let now = now_unix();
+        let threshold = now - (days as i64) * 86400;
+        let removed = self
+            .conn
+            .execute(
+                "DELETE FROM file_cache WHERE updated_at_unix < ?1",
+                params![threshold],
+            )
+            .map_err(|e| format!("Failed to delete old cache rows: {}", e))?;
+        Ok(removed as u64)
+    }
+
+    /// Manual VACUUM.
+    pub fn vacuum(&self) -> Result<(), String> {
+        self.conn
+            .execute_batch("VACUUM;")
+            .map_err(|e| format!("Failed to VACUUM cache DB: {}", e))?;
         Ok(())
     }
 }

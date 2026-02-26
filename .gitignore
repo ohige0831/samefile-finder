@@ -205,3 +205,22 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --- SameFile_Finder monorepo / Rust ---
+# Rust build artifacts (already covered by target/, but explicit is clearer in monorepo)
+rust/target/
+
+# Rust lockfile policy:
+# アプリなら通常は Cargo.lock をコミット推奨（= ignoreしない）
+# ライブラリなら ignore もあり
+# rust/Cargo.lock
+
+# Generated outputs (必要に応じて)
+*.csv
+
+# Windows / VSCode
+Thumbs.db
+.vscode/
+
+# If you do not want bundled fonts tracked (通常は tracked 推奨)
+# rust/assets/fonts/*.ttf

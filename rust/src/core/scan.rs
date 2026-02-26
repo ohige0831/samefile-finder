@@ -52,6 +52,17 @@ fn should_skip_file_name(name: &str) -> bool {
     )
 }
 
+fn should_skip_file_extension(path: &Path, excluded_extensions: &[String]) -> bool {
+    path.extension()
+        .and_then(|s| s.to_str())
+        .map(|ext| {
+            excluded_extensions
+                .iter()
+                .any(|deny| ext.eq_ignore_ascii_case(deny))
+        })
+        .unwrap_or(false)
+}
+
 fn metadata_mtime_ns(metadata: &fs::Metadata) -> i64 {
     match metadata.modified() {
         Ok(st) => match st.duration_since(UNIX_EPOCH) {
@@ -144,6 +155,11 @@ fn walk_dir(
                 if should_skip_file_name(name) {
                     continue;
                 }
+            }
+
+            // UI指定の拡張子除外（大小文字無視）
+            if should_skip_file_extension(&path, &config.excluded_extensions) {
+                continue;
             }
 
             let size = metadata.len();
