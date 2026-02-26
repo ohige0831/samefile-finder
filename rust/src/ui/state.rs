@@ -1,9 +1,9 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{atomic::AtomicBool, mpsc::Receiver, Arc};
 
-use crate::core::types::{FingerprintStats, HashStats, PipelineStatus, PipelineSummary, ScanEvent};
 use crate::core::cache::global_cache_db_path;
+use crate::core::types::{FingerprintStats, HashStats, PipelineStatus, PipelineSummary, ScanEvent};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GroupBadge {
@@ -88,6 +88,10 @@ pub struct SameFileApp {
     pub selected_duplicate_index: Option<usize>,
     pub duplicate_row_index_by_path: HashMap<PathBuf, usize>,
 
+    // v2.3.3: collapsible panels
+    pub show_run_summary: bool,
+    pub show_results_tools: bool,
+
     pub is_running: bool,
     pub status_text: String,
 
@@ -113,6 +117,10 @@ pub struct SameFileApp {
     // v2.3.1: search option
     pub search_filename_only: bool,
 
+    // v2.3.2: keep/reclaim
+    pub keep_paths: HashSet<PathBuf>,
+    pub reclaim_dry_run: bool,
+
     // v2.3.0: cache DB info
     pub cache_db_path: String,
     pub cache_entries: Option<u64>,
@@ -132,20 +140,31 @@ impl Default for SameFileApp {
             duplicate_rows: Vec::new(),
             selected_duplicate_index: None,
             duplicate_row_index_by_path: HashMap::new(),
+
+            show_run_summary: true,
+            show_results_tools: false,
+
             is_running: false,
             status_text: "Idle".to_string(),
+
             worker_rx: None,
             cancel_flag: None,
+
             last_summary: None,
             last_fp_stats: Default::default(),
             last_hash_stats: Default::default(),
+
             show_folder_grouping: true,
             folder_buckets_cache: None,
+
             group_sort_mode: GroupSortMode::GroupIndexAsc,
             group_badge_filter: GroupBadgeFilter::All,
             group_name_filter: String::new(),
 
             search_filename_only: false,
+
+            keep_paths: HashSet::new(),
+            reclaim_dry_run: true,
 
             cache_db_path,
             cache_entries: None,

@@ -9,7 +9,8 @@ use crate::ui::state::{
 
 pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
     ui.group(|ui| {
-        ui.horizontal(|ui| {
+        // ---- Header row (title + grouping/sort/filter) ----
+        ui.horizontal_wrapped(|ui| {
             ui.heading(if app.show_folder_grouping {
                 "Duplicate Result (by folder)"
             } else {
@@ -48,11 +49,37 @@ pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
                     }
                 });
 
-            if ui.button("Clear Selection").clicked() {
-                app.selected_duplicate_index = None;
-            }
+            ui.separator();
+            ui.checkbox(&mut app.show_results_tools, "Tools");
         });
 
+        // ---- Tools (Keep/Reclaim) ----
+        if app.show_results_tools {
+            ui.add_space(4.0);
+            ui.group(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut app.reclaim_dry_run, "Dry run");
+
+                    if ui.button("Clear keeps").clicked() {
+                        app.clear_keeps_all();
+                    }
+
+                    let reclaim = ui
+                        .add(egui::Button::new("Reclaim").small())
+                        .on_hover_text("Move all non-kept files into reclaim folder (non-destructive).");
+                    if reclaim.clicked() {
+                        app.reclaim_move_non_kept();
+                    }
+
+                    ui.separator();
+                    if ui.button("Clear Selection").clicked() {
+                        app.selected_duplicate_index = None;
+                    }
+                });
+            });
+        }
+
+        // ---- Search row ----
         ui.horizontal(|ui| {
             ui.label("Search file/path:");
             ui.add(
@@ -85,7 +112,7 @@ pub fn draw_results_panel(app: &mut SameFileApp, ui: &mut egui::Ui) {
             ));
         }
 
-        egui::ScrollArea::both()
+        egui::ScrollArea::vertical()
             .id_salt("dup_scroll_card_style")
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -145,7 +172,6 @@ fn draw_folder_bucket_view(
 
             ui.add_space(2.0);
 
-            // related folders chips (+N more)
             if bucket.related_folders.is_empty() {
                 ui.label(
                     egui::RichText::new("↔ shares duplicate files within this folder only")
@@ -170,7 +196,12 @@ fn draw_folder_bucket_view(
 
                     if related.len() > shown {
                         let rest = related.len() - shown;
-                        let rest_list = related.iter().skip(shown).cloned().collect::<Vec<_>>().join("\n");
+                        let rest_list = related
+                            .iter()
+                            .skip(shown)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         let resp = ui.add(egui::Button::new(format!("+{} more", rest)));
                         resp.on_hover_text(rest_list);
                     }
@@ -200,12 +231,14 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView, tar
     let meaning = badge_explain_text(badge);
 
     let short_hash = shorten_hash(&gv.hash_hex);
+    let kept_count = gv.files.iter().filter(|p| app.is_kept(p.as_path())).count();
 
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8))
         .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(70, 70, 70)))
         .show(ui, |ui| {
             ui.vertical(|ui| {
+                // 1st row: meta
                 ui.horizontal_wrapped(|ui| {
                     let chip_text = format!("G{}", gv.group_index);
                     let chip = egui::RichText::new(chip_text)
@@ -228,24 +261,36 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView, tar
                         human_readable_bytes(gv.file_size_bytes)
                     );
 
-                    let resp = ui.label(
+                    ui.label(
                         egui::RichText::new(meta_text)
                             .monospace()
                             .color(egui::Color32::from_rgb(210, 210, 210)),
-                    );
-                    resp.on_hover_text(format!("hash(full): {}", gv.hash_hex));
+                    )
+                    .on_hover_text(format!("hash(full): {}", gv.hash_hex));
 
                     for badge in &gv.badges {
                         draw_badge_chip(ui, *badge);
                     }
 
                     ui.label(
+                        egui::RichText::new(format!("★ {}/{}", kept_count, gv.files.len()))
+                            .monospace()
+                            .color(egui::Color32::from_rgb(230, 230, 160)),
+                    );
+
+                    ui.label(
                         egui::RichText::new(meaning)
                             .italics()
                             .color(egui::Color32::from_rgb(170, 170, 170)),
                     );
+                });
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // 2nd row: actions (right-aligned)
+                let h = ui.spacing().interact_size.y; // ボタン1行ぶんの高さ
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), h),
+                    egui::Layout::right_to_left(egui::Align::Min),
+                    |ui| {
                         if ui.small_button("Open folder").clicked() {
                             if let Some(path) = representative.as_deref() {
                                 open_parent_folder(app, path);
@@ -259,8 +304,19 @@ fn draw_group_card(app: &mut SameFileApp, ui: &mut egui::Ui, gv: &GroupView, tar
                         if ui.small_button("Copy paths").clicked() {
                             copy_group_paths(app, ui.ctx(), &gv.files);
                         }
-                    });
-                });
+
+                        ui.separator();
+
+                        if ui.small_button("Clear keeps").clicked() {
+                            app.clear_keeps_in_group(&gv.files);
+                        }
+                        if ui.small_button("Keep first").clicked() {
+                            if let Some(first) = gv.files.first() {
+                                app.keep_only_one_in_group(first.as_path(), &gv.files);
+                            }
+                        }
+                    },
+                );
 
                 ui.add_space(2.0);
 
@@ -305,38 +361,61 @@ fn draw_flat_group_view(
 
 fn draw_file_row(app: &mut SameFileApp, ui: &mut egui::Ui, file_path: &Path, target_root: Option<&Path>) {
     let selected = is_selected_path(app, file_path);
+    let is_kept = app.is_kept(file_path);
     let (_display_rel, file_name, parent_line) = display_parts(file_path, target_root);
 
-    let button_label = format!("{}\n{}", file_name, parent_line);
-    let button = egui::Button::new(
-        egui::RichText::new(button_label)
-            .monospace()
-            .color(if selected {
-                egui::Color32::from_rgb(235, 246, 255)
-            } else {
-                egui::Color32::from_rgb(198, 198, 198)
-            }),
-    )
-    .selected(selected)
-    .fill(if selected {
-        egui::Color32::from_rgba_unmultiplied(90, 140, 210, 90)
-    } else {
-        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4)
+    ui.horizontal(|ui| {
+        let star_text = if is_kept { "★" } else { "☆" };
+        let star_resp = ui
+            .add_sized(
+                [24.0, 46.0],
+                egui::Button::new(
+                    egui::RichText::new(star_text)
+                        .size(16.0)
+                        .color(if is_kept {
+                            egui::Color32::from_rgb(235, 220, 120)
+                        } else {
+                            egui::Color32::from_rgb(140, 140, 140)
+                        }),
+                )
+                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4)),
+            )
+            .on_hover_text(if is_kept { "Keep (ON)" } else { "Keep (OFF)" });
+
+        if star_resp.clicked() {
+            app.toggle_keep(file_path);
+        }
+
+        let button_label = format!("{}\n{}", file_name, parent_line);
+        let button = egui::Button::new(
+            egui::RichText::new(button_label)
+                .monospace()
+                .color(if selected {
+                    egui::Color32::from_rgb(235, 246, 255)
+                } else {
+                    egui::Color32::from_rgb(198, 198, 198)
+                }),
+        )
+        .selected(selected)
+        .fill(if selected {
+            egui::Color32::from_rgba_unmultiplied(90, 140, 210, 90)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4)
+        });
+
+        let response = ui
+            .add_sized([ui.available_width(), 46.0], button)
+            .on_hover_text(file_path.display().to_string());
+
+        if response.clicked() {
+            select_path_in_duplicate_rows(app, file_path);
+        }
+
+        if response.double_clicked() {
+            select_path_in_duplicate_rows(app, file_path);
+            app.reveal_selected_in_explorer();
+        }
     });
-
-    // v2.3.1: row height (46px)
-    let response = ui
-        .add_sized([ui.available_width(), 46.0], button)
-        .on_hover_text(file_path.display().to_string());
-
-    if response.clicked() {
-        select_path_in_duplicate_rows(app, file_path);
-    }
-
-    if response.double_clicked() {
-        select_path_in_duplicate_rows(app, file_path);
-        app.reveal_selected_in_explorer();
-    }
 }
 
 fn draw_badge_chip(ui: &mut egui::Ui, badge: GroupBadge) {
@@ -378,7 +457,6 @@ fn draw_folder_chip(ui: &mut egui::Ui, text: &str) {
 }
 
 fn shorten_hash(hash_hex: &str) -> String {
-    // 8桁 + "…"（短縮表示）
     const N: usize = 8;
     if hash_hex.len() <= N {
         return hash_hex.to_string();
@@ -504,8 +582,10 @@ fn sort_group_views(groups: &mut [GroupView], mode: GroupSortMode, target_root: 
 }
 
 fn sort_group_files(mut files: Vec<PathBuf>, target_root: Option<&Path>) -> Vec<PathBuf> {
-    files.sort_by(|a, b| representative_sort_key(Some(a.as_path()), target_root)
-        .cmp(&representative_sort_key(Some(b.as_path()), target_root)));
+    files.sort_by(|a, b| {
+        representative_sort_key(Some(a.as_path()), target_root)
+            .cmp(&representative_sort_key(Some(b.as_path()), target_root))
+    });
     files
 }
 

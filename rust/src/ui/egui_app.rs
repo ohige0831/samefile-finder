@@ -22,7 +22,18 @@ impl eframe::App for SameFileApp {
                 draw_log_panel(self, &mut cols[0]);
 
                 cols[1].vertical(|ui| {
-                    draw_summary_panel(self, ui);
+                    // v2.3.3: Run Summary can be collapsed to free up space for results.
+                    ui.horizontal(|ui| {
+                        let label = if self.show_run_summary { "▼ Run Summary" } else { "▶ Run Summary" };
+                        if ui.selectable_label(false, label).clicked() {
+                            self.show_run_summary = !self.show_run_summary;
+                        }
+                    });
+
+                    if self.show_run_summary {
+                        draw_summary_panel(self, ui);
+                    }
+
                     ui.add_space(8.0);
                     draw_results_panel(self, ui);
                 });

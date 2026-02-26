@@ -45,7 +45,7 @@ pub fn draw_summary_panel(app: &SameFileApp, ui: &mut egui::Ui) {
         ui.heading("Run Summary");
         ui.separator();
 
-        ui.label(egui::RichText::new("Cache (v2.3.0)").strong());
+        ui.label(egui::RichText::new("Cache / Keep / Reclaim (v2.3.2)").strong());
         ui.label(
             egui::RichText::new(format!("DB: {}", app.cache_db_path))
                 .small()
